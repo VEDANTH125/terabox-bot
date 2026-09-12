@@ -1,0 +1,7 @@
+pyrogram
+tgcrypto
+pymongo[srv]
+requests
+aiohttp
+aiofiles
+
