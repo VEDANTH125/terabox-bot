@@ -8,6 +8,7 @@ asyncio.get_event_loop_policy().set_event_loop(loop)
 import os
 import time
 import uuid
+import urllib.parse
 import aiohttp
 from aiohttp import web
 from pyrogram import Client, filters
@@ -52,16 +53,54 @@ def get_user_data(user_id: int):
     return user
 
 async def get_shortlink(url: str):
-    api_url = f"{config.SHORTENER_URL}?api={config.SHORTENER_API}&url={url}"
+    encoded_url = urllib.parse.quote(url)
+    api_url = f"{config.SHORTENER_URL}?api={config.SHORTENER_API}&url={encoded_url}"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url) as resp:
+            async with session.get(api_url, timeout=10) as resp:
                 data = await resp.json()
-                if data.get("status") == "success":
+                if data.get("status") == "success" and data.get("shortenedUrl"):
                     return data.get("shortenedUrl")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Shortener error: {e}")
     return url
+
+async def fetch_terabox_download(url: str):
+    # Method 1: Primary TeraBox API
+    api1 = f"https://terabox-dl.qtcloud.workers.dev/api/get-info?shorturl={url.split('/')[-1]}"
+    # Method 2: Alternate API
+    api2 = f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={url}"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        # Try Method 1
+        try:
+            async with session.get(api1, timeout=15) as resp:
+                data = await resp.json()
+                if data and "download_link" in data:
+                    return data.get("download_link"), data.get("file_name", "TeraBox_File")
+                if data and "list" in data and len(data["list"]) > 0:
+                    item = data["list"][0]
+                    return item.get("dlink") or item.get("download_link"), item.get("server_filename", "TeraBox_File")
+        except Exception:
+            pass
+
+        # Try Method 2
+        try:
+            async with session.get(api2, timeout=15) as resp:
+                data = await resp.json()
+                if data and isinstance(data, list) and len(data) > 0:
+                    item = data[0]
+                    d_link = item.get("download_url") or item.get("direct_link")
+                    if d_link:
+                        return d_link, item.get("file_name", "TeraBox_File")
+        except Exception:
+            pass
+
+    return None, None
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
@@ -102,6 +141,7 @@ async def terabox_handler(client: Client, message: Message):
     free_used = user.get("free_count", 0)
     bonus_left = user.get("bonus_count", 0)
 
+    # Monetization Check
     if free_used >= 2 and bonus_left <= 0:
         token = str(uuid.uuid4())
         tokens_col.insert_one({"token": token, "user_id": user_id, "created_at": time.time()})
@@ -118,40 +158,32 @@ async def terabox_handler(client: Client, message: Message):
         )
         return
 
+    # Extract URL properly from text/forwarded messages
     words = text.split()
     terabox_url = next((w for w in words if "http" in w), text)
 
-    if free_used < 2:
-        users_col.update_one({"user_id": user_id}, {"$inc": {"free_count": 1}})
-    else:
-        users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": -1}})
-
     status_msg = await message.reply_text("Processing your link... Please wait.")
 
-    api_endpoint = f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={terabox_url}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_endpoint) as resp:
-                data = await resp.json()
-                if data and isinstance(data, list) and len(data) > 0:
-                    item = data[0]
-                    download_link = item.get("download_url") or item.get("direct_link")
-                    file_name = item.get("file_name", "TeraBox_File")
+    download_link, file_name = await fetch_terabox_download(terabox_url)
 
-                    if download_link:
-                        btn = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("Download File", url=download_link)]
-                        ])
-                        await status_msg.edit_text(
-                            f"File Name: {file_name}\n\nClick the button below to download:",
-                            reply_markup=btn
-                        )
-                        return
-        await status_msg.edit_text("Could not extract download link. Please verify the URL.")
-    except Exception:
-        await status_msg.edit_text("Service is currently busy. Please try again later.")
+    if download_link:
+        # Deduct / increase counter only on successful link retrieval
+        if free_used < 2:
+            users_col.update_one({"user_id": user_id}, {"$inc": {"free_count": 1}})
+        else:
+            users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": -1}})
 
-# Web Server to satisfy Render port binding
+        btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Download File / Watch Online", url=download_link)]
+        ])
+        await status_msg.edit_text(
+            f"File Name: `{file_name}`\n\nClick the button below to download:",
+            reply_markup=btn
+        )
+    else:
+        await status_msg.edit_text("Could not extract download link. TeraBox server may be blocking requests right now. Please try another link.")
+
+# Web Server to satisfy Render port check
 async def handle_ping(request):
     return web.Response(text="Bot is running live!")
 
