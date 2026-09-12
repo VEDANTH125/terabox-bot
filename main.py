@@ -1,4 +1,10 @@
 import asyncio
+
+# Fix event loop for Python 3.12+ before importing Pyrogram
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+asyncio.get_event_loop_policy().set_event_loop(loop)
+
 import os
 import time
 import uuid
@@ -8,13 +14,6 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
 import config
-
-# Python 3.12+ Event loop fix
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
 # Initialize Telegram Client
 app = Client(
@@ -152,9 +151,9 @@ async def terabox_handler(client: Client, message: Message):
     except Exception:
         await status_msg.edit_text("Service is currently busy. Please try again later.")
 
-# Lightweight Web Server to satisfy Render's port check
+# Web Server to satisfy Render port binding
 async def handle_ping(request):
-    return web.Response(text="Bot is running live 24/7!")
+    return web.Response(text="Bot is running live!")
 
 async def start_server():
     server = web.Application()
@@ -166,12 +165,12 @@ async def start_server():
     await site.start()
     print(f"Web server started on port {port}")
 
-async def main():
+async def run_bot():
     await start_server()
     await app.start()
-    print("Bot is starting...")
-    await asyncio.Event().wait()
+    print("Bot is started successfully!")
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    asyncio.run(main())
-                               
+    loop.run_until_complete(run_bot())
