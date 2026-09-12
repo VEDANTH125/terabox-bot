@@ -1,20 +1,20 @@
 import asyncio
+import os
+import time
+import uuid
+import aiohttp
+from aiohttp import web
+from pyrogram import Client, filters
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pymongo import MongoClient
+import config
 
-# Event loop initialization for modern Python versions
+# Python 3.12+ Event loop fix
 try:
     asyncio.get_event_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
-import os
-import time
-import uuid
-import aiohttp
-from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from pymongo import MongoClient
-import config
 
 # Initialize Telegram Client
 app = Client(
@@ -24,7 +24,7 @@ app = Client(
     bot_token=config.BOT_TOKEN
 )
 
-# Initialize MongoDB Connection
+# Initialize MongoDB
 mongo_client = MongoClient(config.MONGO_URL)
 db = mongo_client["terabox_db"]
 users_col = db["users"]
@@ -43,7 +43,6 @@ def get_user_data(user_id: int):
         users_col.insert_one(user)
         return user
 
-    # Reset daily limit after 24 hours (86400 seconds)
     if current_time - user.get("last_reset", 0) > 86400:
         users_col.update_one(
             {"user_id": user_id},
@@ -65,12 +64,11 @@ async def get_shortlink(url: str):
         pass
     return url
 
-@app.on_message(filters.command("start"))
+@app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
     user_id = message.from_user.id
     text_split = message.text.split()
 
-    # Handle verification token
     if len(text_split) > 1:
         token = text_split[1]
         token_doc = tokens_col.find_one({"token": token, "user_id": user_id})
@@ -91,15 +89,20 @@ async def start_handler(client: Client, message: Message):
         "- Complete short verification to unlock 3 extra downloads!"
     )
 
-@app.on_message(filters.regex(r"https?://.*(terabox|1024tera|freeterabox|teraboxapp)\.com/\S+"))
+@app.on_message(filters.text & filters.private & ~filters.command(["start"]))
 async def terabox_handler(client: Client, message: Message):
+    text = message.text.strip()
+    
+    if not any(domain in text.lower() for domain in ["terabox", "1024tera", "freeterabox", "terasharelink"]):
+        await message.reply_text("Please send a valid TeraBox link.")
+        return
+
     user_id = message.from_user.id
     user = get_user_data(user_id)
 
     free_used = user.get("free_count", 0)
     bonus_left = user.get("bonus_count", 0)
 
-    # Check limits
     if free_used >= 2 and bonus_left <= 0:
         token = str(uuid.uuid4())
         tokens_col.insert_one({"token": token, "user_id": user_id, "created_at": time.time()})
@@ -116,14 +119,15 @@ async def terabox_handler(client: Client, message: Message):
         )
         return
 
-    # Update limit counter
+    words = text.split()
+    terabox_url = next((w for w in words if "http" in w), text)
+
     if free_used < 2:
         users_col.update_one({"user_id": user_id}, {"$inc": {"free_count": 1}})
     else:
         users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": -1}})
 
     status_msg = await message.reply_text("Processing your link... Please wait.")
-    terabox_url = message.text.strip()
 
     api_endpoint = f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={terabox_url}"
     try:
@@ -148,6 +152,26 @@ async def terabox_handler(client: Client, message: Message):
     except Exception:
         await status_msg.edit_text("Service is currently busy. Please try again later.")
 
-if __name__ == "__main__":
+# Lightweight Web Server to satisfy Render's port check
+async def handle_ping(request):
+    return web.Response(text="Bot is running live 24/7!")
+
+async def start_server():
+    server = web.Application()
+    server.router.add_get("/", handle_ping)
+    runner = web.AppRunner(server)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Web server started on port {port}")
+
+async def main():
+    await start_server()
+    await app.start()
     print("Bot is starting...")
-    app.run()
+    await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+                               
