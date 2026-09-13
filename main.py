@@ -92,15 +92,17 @@ async def fetch_terabox_api(url: str):
         "Accept": "application/json, text/plain, */*"
     }
     
+    # Extract short ID
     match = re.search(r"/(?:s/)?(1[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)$", url)
     short_id = match.group(1) if match else url.split("/")[-1]
     normalized_url = f"https://www.terabox.app/s/{short_id}"
 
+    # Your Dedicated Cloudflare Worker + Fallbacks
     endpoints = [
+        f"https://odd-mountain-2211.info-vedanth-in.workers.dev/?url={normalized_url}",
         f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={normalized_url}",
         f"https://yt-video-production.up.railway.app/terabox?url={normalized_url}",
-        f"https://terabox-api.grayhat.workers.dev/?url={normalized_url}",
-        f"https://terabox-dl.qtcloud.workers.dev/api/get-info?shorturl={short_id.lstrip('1')}"
+        f"https://terabox-api.grayhat.workers.dev/?url={normalized_url}"
     ]
 
     async with aiohttp.ClientSession(headers=headers) as session:
@@ -109,9 +111,9 @@ async def fetch_terabox_api(url: str):
                 async with session.get(ep, timeout=12) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        if data and "download_url" in data:
+                        if data and "download_url" in data and data.get("download_url"):
                             return data.get("download_url"), data.get("file_name", "TeraBox_Video.mp4")
-                        if data and "direct_link" in data:
+                        if data and "direct_link" in data and data.get("direct_link"):
                             return data.get("direct_link"), data.get("file_name", "TeraBox_Video.mp4")
                         if data and "list" in data and len(data["list"]) > 0:
                             item = data["list"][0]
@@ -265,7 +267,7 @@ async def start_handler(client: Client, message: Message):
 
         await message.reply_text(text=welcome_text, reply_markup=get_main_keyboard())
     except Exception as e:
-        print(f"Start handler error: {e}")
+        print(f"Start error: {e}")
 
 @app.on_message(filters.command("premium") & filters.private)
 async def premium_cmd_handler(client: Client, message: Message):
