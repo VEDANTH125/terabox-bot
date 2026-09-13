@@ -90,32 +90,40 @@ async def get_shortlink(url: str):
 
 async def fetch_terabox_api(url: str):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    api1 = f"https://yt-video-production.up.railway.app/terabox?url={url}"
-    api2 = f"https://terabox-dl.qtcloud.workers.dev/api/get-info?shorturl={url.split('/')[-1]}"
     
-    async with aiohttp.ClientSession(headers=headers) as session:
-        try:
-            async with session.get(api1, timeout=12) as resp:
-                data = await resp.json()
-                if data and "download_url" in data:
-                    return data.get("download_url"), data.get("file_name", "TeraBox_Video.mp4")
-                if data and "direct_link" in data:
-                    return data.get("direct_link"), data.get("file_name", "TeraBox_Video.mp4")
-        except Exception:
-            pass
+    endpoints = [
+        f"https://yt-video-production.up.railway.app/terabox?url={url}",
+        f"https://terabox-dl.qtcloud.workers.dev/api/get-info?shorturl={url.split('/')[-1]}",
+        f"https://terabox-api.grayhat.workers.dev/?url={url}",
+        f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={url}"
+    ]
 
-        try:
-            async with session.get(api2, timeout=12) as resp:
-                data = await resp.json()
-                if data and "download_link" in data:
-                    return data.get("download_link"), data.get("file_name", "TeraBox_Video.mp4")
-                if data and "list" in data and len(data["list"]) > 0:
-                    item = data["list"][0]
-                    return item.get("dlink") or item.get("download_link"), item.get("server_filename", "TeraBox_Video.mp4")
-        except Exception:
-            pass
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for ep in endpoints:
+            try:
+                async with session.get(ep, timeout=15) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        # Structure 1
+                        if data and "download_url" in data:
+                            return data.get("download_url"), data.get("file_name", "TeraBox_Video.mp4")
+                        if data and "direct_link" in data:
+                            return data.get("direct_link"), data.get("file_name", "TeraBox_Video.mp4")
+                        # Structure 2 (List format)
+                        if data and "list" in data and len(data["list"]) > 0:
+                            item = data["list"][0]
+                            dlink = item.get("dlink") or item.get("download_link") or item.get("direct_link")
+                            fname = item.get("server_filename") or item.get("filename", "TeraBox_Video.mp4")
+                            if dlink:
+                                return dlink, fname
+                        # Structure 3 (Nested response)
+                        if data and "response" in data and len(data["response"]) > 0:
+                            item = data["response"][0]
+                            return item.get("resolutions", {}).get("Fast Download") or item.get("dlink"), item.get("server_filename", "TeraBox_Video.mp4")
+            except Exception:
+                continue
 
     return None, None
 
@@ -495,7 +503,7 @@ async def process_terabox_link(client: Client, message: Message):
         else:
             users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": -1}})
 
-        # Direct Video Stream / Upload Delivery with Auto-Delete in 3 Hours
+    # Direct Video Stream / Upload Delivery with Auto-Delete in 3 Hours
     try:
         temp_file = f"download_{user_id}_{int(time.time())}.mp4"
         async with aiohttp.ClientSession() as session:
