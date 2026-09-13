@@ -24,7 +24,8 @@ from pymongo import MongoClient
 import config
 
 # Configuration Variables
-ADMIN_ID = 8558066253
+ADMIN_ID = 8266084614
+ADMIN_USERNAME = "MrXman5"
 UPI_ID = "Vedanth1439@ybl"
 
 # Initialize Pyrogram Bot Client
@@ -146,7 +147,7 @@ PLANS = {
         "price": "49",
         "days": 60,
         "validity": "60 Days (2 Months)",
-        "desc": "Value for money pack with two months of unlimited high speed."
+        "desc": "Value pack with two months of unlimited high speed access."
     },
     "139": {
         "name": "Iconic Plan",
@@ -169,14 +170,14 @@ PLANS = {
 async def add_premium_cmd(client: Client, message: Message):
     args = message.text.split()
     if len(args) < 3:
-        await message.reply_text("⚠️ **Format:** `/addpremium <user_id> <days>`\nఉదాహరణ: `/addpremium 123456789 30`")
+        await message.reply_text("⚠️ **Usage:** `/addpremium <user_id> <days>`\nExample: `/addpremium 123456789 30`")
         return
 
     try:
         target_user_id = int(args[1])
         days = int(args[2])
     except ValueError:
-        await message.reply_text("❌ User ID మరియు Days కేవలం నంబర్లు మాత్రమే అయి ఉండాలి.")
+        await message.reply_text("❌ User ID and Days must be valid numbers.")
         return
 
     seconds_to_add = days * 86400
@@ -194,16 +195,16 @@ async def add_premium_cmd(client: Client, message: Message):
         upsert=True
     )
 
-    await message.reply_text(f"✅ User `{target_user_id}` కి **{days} రోజుల ప్రీమియం** విజయవంతంగా యాక్టివేట్ చేయబడింది!")
+    await message.reply_text(f"✅ User `{target_user_id}` has been granted **{days} days of Premium** successfully!")
 
     # Notify target user
     try:
         await client.send_message(
             chat_id=target_user_id,
             text=(
-                f"🎉 **ప్రీమియం సబ్‌స్క్రిప్షన్ యాక్టివేట్ అయింది!**\n\n"
-                f"⏳ **వ్యాలిడిటీ:** {days} రోజులు\n"
-                f"⚡ ఇకపై మీరు ఎలాంటి లిమిట్స్ లేకుండా అపరిమితంగా ఫైల్స్ డౌన్‌లోడ్ చేసుకోవచ్చు!"
+                f"🎉 **Premium Subscription Activated!**\n\n"
+                f"⏳ **Validity:** {days} Days\n"
+                f"⚡ You can now enjoy unlimited downloads without any limits or verification tokens!"
             )
         )
     except Exception as e:
@@ -325,19 +326,19 @@ async def callback_router(client: Client, query: CallbackQuery):
 
         detail_text = (
             f"👑 **{plan['name']} - ₹{price}**\n\n"
-            f"⏳ **వ్యాలిడిటీ:** {plan['validity']}\n"
-            f"📝 **వివరణ:** {plan['desc']}\n\n"
+            f"⏳ **Validity:** {plan['validity']}\n"
+            f"📝 **Details:** {plan['desc']}\n\n"
             f"💳 **UPI ID:** `{UPI_ID}`\n"
-            f"🆔 **మీ టెలిగ్రామ్ ID:** `{user_id}`\n\n"
+            f"🆔 **Your Telegram ID:** `{user_id}`\n\n"
             "──────────────────\n"
-            "📌 **పేమెంట్ చేసే విధానం:**\n"
-            "1. పైన ఉన్న QR కోడ్ స్కాన్ చేయండి లేదా UPI ID కాపీ చేసి PhonePe/GPay లో పే చేయండి.\n"
-            f"2. పేమెంట్ పూర్తయ్యాక ఆ **స్క్రీన్‌షాట్** మరియు మీ **ID: `{user_id}`** ని క్రింది బటన్ నొక్కి అడ్మిన్‌కు పంపండి.\n\n"
-            "⚠️ ఎంచుకున్న మొత్తాన్ని మాత్రమే ఖచ్చితంగా చెల్లించండి."
+            "📌 **How to Complete Payment:**\n"
+            "1. Scan the QR code above or copy the UPI ID and pay via PhonePe / Google Pay / Paytm.\n"
+            f"2. After payment, send the **Payment Screenshot** along with your **ID (`{user_id}`)** by clicking the button below.\n\n"
+            "⚠️ Please pay the exact amount for faster activation."
         )
 
         detail_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📩 Send Screenshot to Admin", url=f"tg://user?id={ADMIN_ID}")],
+            [InlineKeyboardButton("📩 Send Screenshot to Admin", url=f"https://t.me/{ADMIN_USERNAME}")],
             [InlineKeyboardButton("« Back to Plans", callback_data="btn_premium")]
         ])
 
@@ -494,7 +495,7 @@ async def process_terabox_link(client: Client, message: Message):
         else:
             users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": -1}})
 
-    # Direct Video Stream / Upload Delivery
+        # Direct Video Stream / Upload Delivery with Auto-Delete in 3 Hours
     try:
         temp_file = f"download_{user_id}_{int(time.time())}.mp4"
         async with aiohttp.ClientSession() as session:
@@ -503,15 +504,33 @@ async def process_terabox_link(client: Client, message: Message):
                     async with aiofiles.open(temp_file, mode='wb') as f:
                         await f.write(await resp.read())
 
-                    await client.send_video(
+                    caption_text = (
+                        f"🎬 **File Name:** `{file_name}`\n\n"
+                        f"⚠️ **Notice:** This video will automatically expire & delete in **3 Hours** for copyright safety.\n"
+                        f"📌 Please forward or save this video to your saved messages/chats now!\n\n"
+                        f"⚡ Delivered via @{config.BOT_USERNAME}"
+                    )
+
+                    sent_msg = await client.send_video(
                         chat_id=message.chat.id,
                         video=temp_file,
-                        caption=f"🎬 **File Name:** `{file_name}`\n\n⚡ Delivered via @{config.BOT_USERNAME}",
+                        caption=caption_text,
                         reply_to_message_id=message.id
                     )
+
                     if os.path.exists(temp_file):
                         os.remove(temp_file)
                     await info_msg.delete()
+
+                    # Background task to delete video after 3 hours (10800 seconds)
+                    async def delete_after_delay(chat_id, msg_id):
+                        await asyncio.sleep(10800)
+                        try:
+                            await client.delete_messages(chat_id=chat_id, message_ids=msg_id)
+                        except Exception as e:
+                            print(f"Auto-delete error: {e}")
+
+                    asyncio.create_task(delete_after_delay(sent_msg.chat.id, sent_msg.id))
                     return
     except Exception as e:
         print(f"Direct stream upload error: {e}")
@@ -521,6 +540,7 @@ async def process_terabox_link(client: Client, message: Message):
     ])
     await info_msg.edit_text(
         f"🎬 **File Name:** `{file_name}`\n\n"
+        f"⚠️ **Notice:** Direct link / stream will expire soon. Please save/download promptly.\n\n"
         f"Click below to watch or download directly:",
         reply_markup=btn
     )
