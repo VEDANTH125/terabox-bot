@@ -90,14 +90,22 @@ async def get_shortlink(url: str):
 
 async def fetch_terabox_api(url: str):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*"
     }
     
+    # Extract clean short ID
+    match = re.search(r"/(?:s/)?(1[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)$", url)
+    short_id = match.group(1) if match else url.split("/")[-1]
+    
+    # Standardize URL
+    normalized_url = f"https://www.terabox.app/s/{short_id}"
+
     endpoints = [
-        f"https://yt-video-production.up.railway.app/terabox?url={url}",
-        f"https://terabox-dl.qtcloud.workers.dev/api/get-info?shorturl={url.split('/')[-1]}",
-        f"https://terabox-api.grayhat.workers.dev/?url={url}",
-        f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={url}"
+        f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={normalized_url}",
+        f"https://yt-video-production.up.railway.app/terabox?url={normalized_url}",
+        f"https://terabox-api.grayhat.workers.dev/?url={normalized_url}",
+        f"https://terabox-dl.qtcloud.workers.dev/api/get-info?shorturl={short_id.lstrip('1')}"
     ]
 
     async with aiohttp.ClientSession(headers=headers) as session:
@@ -106,22 +114,29 @@ async def fetch_terabox_api(url: str):
                 async with session.get(ep, timeout=15) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        # Structure 1
+                        
+                        # Type 1: Direct URL in keys
                         if data and "download_url" in data:
                             return data.get("download_url"), data.get("file_name", "TeraBox_Video.mp4")
                         if data and "direct_link" in data:
                             return data.get("direct_link"), data.get("file_name", "TeraBox_Video.mp4")
-                        # Structure 2 (List format)
+                            
+                        # Type 2: In 'list' array
                         if data and "list" in data and len(data["list"]) > 0:
                             item = data["list"][0]
                             dlink = item.get("dlink") or item.get("download_link") or item.get("direct_link")
                             fname = item.get("server_filename") or item.get("filename", "TeraBox_Video.mp4")
                             if dlink:
                                 return dlink, fname
-                        # Structure 3 (Nested response)
+                                
+                        # Type 3: In 'response' array
                         if data and "response" in data and len(data["response"]) > 0:
                             item = data["response"][0]
-                            return item.get("resolutions", {}).get("Fast Download") or item.get("dlink"), item.get("server_filename", "TeraBox_Video.mp4")
+                            res = item.get("resolutions", {})
+                            dlink = res.get("Fast Download") or res.get("HD Video") or item.get("dlink")
+                            fname = item.get("server_filename", "TeraBox_Video.mp4")
+                            if dlink:
+                                return dlink, fname
             except Exception:
                 continue
 
