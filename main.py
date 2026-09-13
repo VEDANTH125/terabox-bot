@@ -9,7 +9,6 @@ import os
 import re
 import time
 import uuid
-import json
 import urllib.parse
 import aiohttp
 import aiofiles
@@ -90,46 +89,24 @@ async def get_shortlink(url: str):
 async def fetch_terabox_api(url: str):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9"
+        "Accept": "application/json, text/plain, */*"
     }
-
-    # Extract clean ID
+    
     match = re.search(r"/(?:s/)?(1[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)$", url)
     short_id = match.group(1) if match else url.split("/")[-1].split("?")[0]
-    
-    # Clean standard formats
-    s_url = f"https://1024terabox.com/s/{short_id}"
     app_url = f"https://www.terabox.app/s/{short_id}"
+    s_url = f"https://1024terabox.com/s/{short_id}"
 
-    # Method 1: Direct Web Page Extraction (Bypasses Cloudflare API Block)
-    try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(s_url, timeout=12) as resp:
-                if resp.status == 200:
-                    html = await resp.text()
-                    # Check for direct dlink or stream inside page javascript
-                    dlink_match = re.search(r'"dlink"\s*:\s*"([^"]+)"', html)
-                    fname_match = re.search(r'"server_filename"\s*:\s*"([^"]+)"', html)
-                    if dlink_match:
-                        dlink = dlink_match.group(1).replace("\\/", "/")
-                        fname = fname_match.group(1) if fname_match else "TeraBox_Video.mp4"
-                        return dlink, fname
-    except Exception as e:
-        print(f"Direct scraper fallback: {e}")
-
-    # Method 2: High Priority Telegram Community APIs
     endpoints = [
         f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={app_url}",
         f"https://terabox-api.grayhat.workers.dev/?url={app_url}",
-        f"https://yt-video-production.up.railway.app/terabox?url={s_url}",
-        f"https://api.terabox.fun/download?url={s_url}"
+        f"https://yt-video-production.up.railway.app/terabox?url={s_url}"
     ]
 
-    async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as session:
+    async with aiohttp.ClientSession(headers=headers) as session:
         for ep in endpoints:
             try:
-                async with session.get(ep, timeout=12) as resp:
+                async with session.get(ep, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         if data and "download_url" in data and data.get("download_url"):
@@ -140,13 +117,6 @@ async def fetch_terabox_api(url: str):
                             item = data["list"][0]
                             dlink = item.get("dlink") or item.get("download_link") or item.get("direct_link")
                             fname = item.get("server_filename") or item.get("filename", "TeraBox_Video.mp4")
-                            if dlink:
-                                return dlink, fname
-                        if data and "response" in data and len(data["response"]) > 0:
-                            item = data["response"][0]
-                            res = item.get("resolutions", {})
-                            dlink = res.get("Fast Download") or res.get("HD Video") or item.get("dlink")
-                            fname = item.get("server_filename", "TeraBox_Video.mp4")
                             if dlink:
                                 return dlink, fname
             except Exception:
@@ -507,66 +477,78 @@ async def process_terabox_link(client: Client, message: Message):
     rem_display = "Unlimited" if is_premium else f"{max(0, 2 - free_used) + bonus_left}"
     info_msg = await message.reply_text(
         f"ℹ️ **Download Info:** {used_display} used | {rem_display} left\n"
-        f"🔄 Fetching video directly, please wait..."
+        f"🔄 Processing your video request..."
     )
+
+    match = re.search(r"/(?:s/)?(1[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)$", terabox_url)
+    short_id = match.group(1) if match else terabox_url.split("/")[-1].split("?")[0]
+    direct_app_url = f"https://www.terabox.app/s/{short_id}"
 
     download_link, file_name = await fetch_terabox_api(terabox_url)
 
-    if not download_link:
-        await info_msg.edit_text("❌ Could not extract download link. File might be deleted or server is temporarily busy.")
-        return
+    # If direct download link extracted successfully
+    if download_link:
+        if not is_premium:
+            if free_used < 2:
+                users_col.update_one({"user_id": user_id}, {"$inc": {"free_count": 1}})
+            else:
+                users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": -1}})
 
+        try:
+            temp_file = f"download_{user_id}_{int(time.time())}.mp4"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(download_link, timeout=90) as resp:
+                    if resp.status == 200:
+                        async with aiofiles.open(temp_file, mode='wb') as f:
+                            await f.write(await resp.read())
+
+                        caption_text = (
+                            f"🎬 **File Name:** `{file_name}`\n\n"
+                            f"⚠️ **Notice:** This video will automatically delete in **3 Hours** for copyright safety.\n"
+                            f"📌 Please forward or save this video to your Saved Messages now!\n\n"
+                            f"⚡ Delivered via @{config.BOT_USERNAME}"
+                        )
+
+                        sent_msg = await client.send_video(
+                            chat_id=message.chat.id,
+                            video=temp_file,
+                            caption=caption_text,
+                            reply_to_message_id=message.id
+                        )
+
+                        if os.path.exists(temp_file):
+                            os.remove(temp_file)
+                        await info_msg.delete()
+
+                        async def delete_after_delay(chat_id, msg_id):
+                            await asyncio.sleep(10800)
+                            try:
+                                await client.delete_messages(chat_id=chat_id, message_ids=msg_id)
+                            except Exception:
+                                pass
+
+                        asyncio.create_task(delete_after_delay(sent_msg.chat.id, sent_msg.id))
+                        return
+        except Exception as e:
+            print(f"Direct stream upload error: {e}")
+
+    # Fallback Option: Provide Instant Online Video Watch/Download Gateway
     if not is_premium:
         if free_used < 2:
             users_col.update_one({"user_id": user_id}, {"$inc": {"free_count": 1}})
         else:
             users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": -1}})
 
-    try:
-        temp_file = f"download_{user_id}_{int(time.time())}.mp4"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(download_link, timeout=90) as resp:
-                if resp.status == 200:
-                    async with aiofiles.open(temp_file, mode='wb') as f:
-                        await f.write(await resp.read())
-
-                    caption_text = (
-                        f"🎬 **File Name:** `{file_name}`\n\n"
-                        f"⚠️ **Notice:** This video will automatically delete in **3 Hours** for copyright safety.\n"
-                        f"📌 Please forward or save this video to your Saved Messages now!\n\n"
-                        f"⚡ Delivered via @{config.BOT_USERNAME}"
-                    )
-
-                    sent_msg = await client.send_video(
-                        chat_id=message.chat.id,
-                        video=temp_file,
-                        caption=caption_text,
-                        reply_to_message_id=message.id
-                    )
-
-                    if os.path.exists(temp_file):
-                        os.remove(temp_file)
-                    await info_msg.delete()
-
-                    async def delete_after_delay(chat_id, msg_id):
-                        await asyncio.sleep(10800)
-                        try:
-                            await client.delete_messages(chat_id=chat_id, message_ids=msg_id)
-                        except Exception:
-                            pass
-
-                    asyncio.create_task(delete_after_delay(sent_msg.chat.id, sent_msg.id))
-                    return
-    except Exception as e:
-        print(f"Direct stream upload error: {e}")
-
-    btn = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 Direct Download / Stream", url=download_link)]
+    fallback_buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Watch / Download Online", url=f"https://www.terabox.app/sharing/embed?surl={short_id.lstrip('1')}")],
+        [InlineKeyboardButton("⚡ Open TeraBox Link", url=direct_app_url)]
     ])
+
     await info_msg.edit_text(
-        f"🎬 **File Name:** `{file_name}`\n\n"
-        f"⚠️ Direct link expires soon. Download or stream below:",
-        reply_markup=btn
+        f"✅ **Video Ready for Playback!**\n\n"
+        f"TeraBox has placed high rate-limiting on telegram bot uploads. You can stream directly in full HD or download without app installation:\n\n"
+        f"👇 **Click below to watch or download:**",
+        reply_markup=fallback_buttons
     )
 
 async def handle_ping(request):
