@@ -1,6 +1,6 @@
 import asyncio
 
-# Fix event loop for Pyrogram on modern Python
+# Setup event loop
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 asyncio.get_event_loop_policy().set_event_loop(loop)
@@ -60,12 +60,10 @@ def get_user_data(user_id: int, first_name: str = "User"):
         users_col.insert_one(user)
         return user
 
-    # Check premium expiry
     if user.get("is_premium") and current_time > user.get("premium_expiry", 0):
         users_col.update_one({"user_id": user_id}, {"$set": {"is_premium": False}})
         user["is_premium"] = False
 
-    # 24-hour reset for free daily limits
     if current_time - user.get("last_reset", 0) > 86400:
         users_col.update_one(
             {"user_id": user_id},
@@ -94,11 +92,8 @@ async def fetch_terabox_api(url: str):
         "Accept": "application/json, text/plain, */*"
     }
     
-    # Extract clean short ID
     match = re.search(r"/(?:s/)?(1[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)$", url)
     short_id = match.group(1) if match else url.split("/")[-1]
-    
-    # Standardize URL
     normalized_url = f"https://www.terabox.app/s/{short_id}"
 
     endpoints = [
@@ -111,25 +106,19 @@ async def fetch_terabox_api(url: str):
     async with aiohttp.ClientSession(headers=headers) as session:
         for ep in endpoints:
             try:
-                async with session.get(ep, timeout=15) as resp:
+                async with session.get(ep, timeout=12) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        
-                        # Type 1: Direct URL in keys
                         if data and "download_url" in data:
                             return data.get("download_url"), data.get("file_name", "TeraBox_Video.mp4")
                         if data and "direct_link" in data:
                             return data.get("direct_link"), data.get("file_name", "TeraBox_Video.mp4")
-                            
-                        # Type 2: In 'list' array
                         if data and "list" in data and len(data["list"]) > 0:
                             item = data["list"][0]
                             dlink = item.get("dlink") or item.get("download_link") or item.get("direct_link")
                             fname = item.get("server_filename") or item.get("filename", "TeraBox_Video.mp4")
                             if dlink:
                                 return dlink, fname
-                                
-                        # Type 3: In 'response' array
                         if data and "response" in data and len(data["response"]) > 0:
                             item = data["response"][0]
                             res = item.get("resolutions", {})
@@ -188,7 +177,6 @@ PLANS = {
     }
 }
 
-# Admin Command: /addpremium <user_id> <days>
 @app.on_message(filters.command("addpremium") & filters.user(ADMIN_ID))
 async def add_premium_cmd(client: Client, message: Message):
     args = message.text.split()
@@ -220,7 +208,6 @@ async def add_premium_cmd(client: Client, message: Message):
 
     await message.reply_text(f"✅ User `{target_user_id}` has been granted **{days} days of Premium** successfully!")
 
-    # Notify target user
     try:
         await client.send_message(
             chat_id=target_user_id,
@@ -230,54 +217,89 @@ async def add_premium_cmd(client: Client, message: Message):
                 f"⚡ You can now enjoy unlimited downloads without any limits or verification tokens!"
             )
         )
-    except Exception as e:
-        print(f"Could not notify user: {e}")
+    except Exception:
+        pass
 
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
-    user_id = message.from_user.id
-    first_name = message.from_user.first_name or "User"
-    text_split = message.text.split()
-
-    if len(text_split) > 1:
-        param = text_split[1]
-        
-        if param.startswith("verify_"):
-            token = param.replace("verify_", "")
-            token_doc = tokens_col.find_one({"token": token, "user_id": user_id})
-            if token_doc:
-                users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": 3}})
-                tokens_col.delete_one({"_id": token_doc["_id"]})
-                await message.reply_text("✅ Verification successful! You received 3 additional downloads. Send your TeraBox link now.")
-                return
-            else:
-                await message.reply_text("❌ Invalid or expired verification link.")
-                return
-
-        elif param.startswith("invite_"):
-            try:
-                referrer_id = int(param.replace("invite_", ""))
-                if referrer_id != user_id and not users_col.find_one({"user_id": user_id}):
-                    users_col.update_one({"user_id": referrer_id}, {"$inc": {"invites": 1, "coins": 1}})
-            except Exception:
-                pass
-
-    user = get_user_data(user_id, first_name)
-    welcome_text = (
-        f"Hello, {first_name}!\n\n"
-        "Welcome to TeraBox Download Bot! 😊\n\n"
-        "1. Send me a TeraBox link.\n"
-        "2. Relax while I process your request.\n\n"
-        f"🎯 Your Earning Stats:\n"
-        f"├ Invites: {user.get('invites', 0)}\n"
-        f"└ Coins: {user.get('coins', 0)}"
-    )
-
-    photo_banner = "https://i.ibb.co/vzjC4wY/invite-banner.png"
     try:
-        await message.reply_photo(photo=photo_banner, caption=welcome_text, reply_markup=get_main_keyboard())
-    except Exception:
+        user_id = message.from_user.id
+        first_name = message.from_user.first_name or "User"
+        text_split = message.text.split()
+
+        if len(text_split) > 1:
+            param = text_split[1]
+            
+            if param.startswith("verify_"):
+                token = param.replace("verify_", "")
+                token_doc = tokens_col.find_one({"token": token, "user_id": user_id})
+                if token_doc:
+                    users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": 3}})
+                    tokens_col.delete_one({"_id": token_doc["_id"]})
+                    await message.reply_text("✅ Verification successful! You received 3 additional downloads. Send your TeraBox link now.")
+                    return
+                else:
+                    await message.reply_text("❌ Invalid or expired verification link.")
+                    return
+
+            elif param.startswith("invite_"):
+                try:
+                    referrer_id = int(param.replace("invite_", ""))
+                    if referrer_id != user_id and not users_col.find_one({"user_id": user_id}):
+                        users_col.update_one({"user_id": referrer_id}, {"$inc": {"invites": 1, "coins": 1}})
+                except Exception:
+                    pass
+
+        user = get_user_data(user_id, first_name)
+        welcome_text = (
+            f"👋 **Hello, {first_name}!**\n\n"
+            "Welcome to **TeraBox Downloader Bot**! ⚡\n\n"
+            "📥 **How to use:**\n"
+            "1. Send any valid TeraBox link.\n"
+            "2. Wait a moment while the bot processes your video.\n\n"
+            f"🎯 **Your Account Stats:**\n"
+            f"├ 🎁 Invites: `{user.get('invites', 0)}`\n"
+            f"├ 💰 Coins: `{user.get('coins', 0)}`\n"
+            f"└ ⭐ Status: `{'Premium' if user.get('is_premium') else 'Free'}`"
+        )
+
         await message.reply_text(text=welcome_text, reply_markup=get_main_keyboard())
+    except Exception as e:
+        print(f"Start handler error: {e}")
+
+@app.on_message(filters.command("premium") & filters.private)
+async def premium_cmd_handler(client: Client, message: Message):
+    premium_text = (
+        "💎 **Premium Benefits**\n\n"
+        "🚀 Lightning Fast Downloads\n"
+        "⚡ Priority Queue Access\n"
+        "🎬 Original Quality Downloads\n"
+        "🎯 Priority Support\n"
+        "📁 Download Files Up to 4GB\n"
+        "🚫 Zero Ads & Zero Token System\n\n"
+        "──────────────────\n\n"
+        "◈ **Choose Your Premium Plan:**"
+    )
+    prem_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("₹12 = 7 days", callback_data="plan_12")],
+        [InlineKeyboardButton("₹29 = 30 days", callback_data="plan_29")],
+        [InlineKeyboardButton("₹49 = 60 days", callback_data="plan_49")],
+        [InlineKeyboardButton("₹139 = 6 Months", callback_data="plan_139")],
+        [InlineKeyboardButton("₹219 = 1 Year", callback_data="plan_219")],
+        [InlineKeyboardButton("« Back", callback_data="btn_home")]
+    ])
+    await message.reply_text(premium_text, reply_markup=prem_keyboard)
+
+@app.on_message(filters.command("help") & filters.private)
+async def help_cmd_handler(client: Client, message: Message):
+    help_text = (
+        "📖 **Help & Instructions**\n\n"
+        "1. Copy any video link from TeraBox.\n"
+        "2. Paste and send the link to this chat.\n"
+        "3. Download or stream the video instantly!\n\n"
+        "⚠️ **Note:** Free users get 2 free daily downloads. Upgrade to `/premium` for unlimited access!"
+    )
+    await message.reply_text(help_text)
 
 @app.on_callback_query()
 async def callback_router(client: Client, query: CallbackQuery):
@@ -289,18 +311,20 @@ async def callback_router(client: Client, query: CallbackQuery):
 
     if data == "btn_home":
         welcome_text = (
-            f"Hello, {first_name}!\n\n"
-            "Welcome to TeraBox Download Bot! 😊\n\n"
-            "1. Send me a TeraBox link.\n"
-            "2. Relax while I process your request.\n\n"
-            f"🎯 Your Earning Stats:\n"
-            f"├ Invites: {user.get('invites', 0)}\n"
-            f"└ Coins: {user.get('coins', 0)}"
+            f"👋 **Hello, {first_name}!**\n\n"
+            "Welcome to **TeraBox Downloader Bot**! ⚡\n\n"
+            "📥 **How to use:**\n"
+            "1. Send any valid TeraBox link.\n"
+            "2. Wait a moment while the bot processes your video.\n\n"
+            f"🎯 **Your Account Stats:**\n"
+            f"├ 🎁 Invites: `{user.get('invites', 0)}`\n"
+            f"├ 💰 Coins: `{user.get('coins', 0)}`\n"
+            f"└ ⭐ Status: `{'Premium' if user.get('is_premium') else 'Free'}`"
         )
         try:
             await query.message.edit_text(welcome_text, reply_markup=get_main_keyboard())
         except Exception:
-            await query.message.edit_caption(caption=welcome_text, reply_markup=get_main_keyboard())
+            pass
 
     elif data == "btn_premium":
         premium_text = (
@@ -310,20 +334,9 @@ async def callback_router(client: Client, query: CallbackQuery):
             "🎬 Original Quality Downloads\n"
             "🎯 Priority Support\n"
             "📁 Download Files Up to 4GB\n"
-            "🤖 Premium on ALL Bots\n"
-            "🚫 No Ads\n"
-            "🎟️ No Token System\n\n"
+            "🚫 Zero Ads & Zero Token System\n\n"
             "──────────────────\n\n"
-            "◈ **Choose Your Premium Plan:**\n\n"
-            "Basic Plan - ₹12\n"
-            "Pro Plan - ₹29\n"
-            "Proplus plan - ₹49\n"
-            "Iconic plan - ₹139\n"
-            "Ultra Plan - ₹219\n\n"
-            "──────────────────\n\n"
-            "🤖 One Premium Subscription =\n"
-            "Access to ALL Terabox Bots!\n\n"
-            "💡 Click a button below to view plan details & payment instructions!"
+            "◈ **Choose Your Premium Plan:**"
         )
         prem_keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("₹12 = 7 days", callback_data="plan_12")],
@@ -336,14 +349,13 @@ async def callback_router(client: Client, query: CallbackQuery):
         try:
             await query.message.edit_text(premium_text, reply_markup=prem_keyboard)
         except Exception:
-            await query.message.edit_caption(caption=premium_text, reply_markup=prem_keyboard)
+            pass
 
     elif data.startswith("plan_"):
         plan_id = data.replace("plan_", "")
         plan = PLANS.get(plan_id, PLANS["12"])
         price = plan["price"]
 
-        # Dynamic locked QR Code URL
         upi_payload = f"upi://pay?pa={UPI_ID}&pn=TeraBoxBot&am={price}&cu=INR"
         qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=350x350&data={urllib.parse.quote(upi_payload)}"
 
@@ -355,9 +367,9 @@ async def callback_router(client: Client, query: CallbackQuery):
             f"🆔 **Your Telegram ID:** `{user_id}`\n\n"
             "──────────────────\n"
             "📌 **How to Complete Payment:**\n"
-            "1. Scan the QR code above or copy the UPI ID and pay via PhonePe / Google Pay / Paytm.\n"
-            f"2. After payment, send the **Payment Screenshot** along with your **ID (`{user_id}`)** by clicking the button below.\n\n"
-            "⚠️ Please pay the exact amount for faster activation."
+            "1. Scan the QR code above or pay directly to the UPI ID.\n"
+            f"2. Send payment screenshot with your **ID (`{user_id}`)** to admin.\n\n"
+            "⚠️ Please pay exact amount for faster activation."
         )
 
         detail_kb = InlineKeyboardMarkup([
@@ -377,90 +389,66 @@ async def callback_router(client: Client, query: CallbackQuery):
 
     elif data == "btn_about":
         about_text = (
-            "🤖 **Codezora_terabot - Bot Information**\n\n"
-            "🔢 Version: 12.7.0\n"
-            "🏷 Bot Index: CT06\n"
-            "⚡ Platform: CodeZora V3\n"
-            f"👑 Owned by: @{bot_username}\n\n"
-            "📊 **Bot Statistics:**\n"
-            "├ 👥 Users: 2,209\n"
-            "├ 👥 Groups: 1\n"
-            "└ 📩 Total Downloads: 26,583\n\n"
+            "🤖 **TeraBox Downloader - Bot Information**\n\n"
+            "⚡ Fast & Reliable Downloads\n"
+            f"👑 Managed by: @{ADMIN_USERNAME}\n\n"
             "✨ **Features:**\n"
-            "├ ✅ TeraBox File Downloads\n"
-            "├ ✅ Fast & Reliable\n"
-            "├ ✅ Premium Plans Available\n"
-            "└ ✅ Referral Rewards System"
+            "├ ✅ High-Speed Stream/Download\n"
+            "├ ✅ Direct Video Playback\n"
+            "├ ✅ Auto-Delete Protection (3 Hours)\n"
+            "└ ✅ Premium Plans for Unlimited Usage"
         )
         try:
-            await query.message.edit_text(about_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Back to Start", callback_data="btn_home")]]))
+            await query.message.edit_text(about_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Back", callback_data="btn_home")]]))
         except Exception:
-            await query.message.edit_caption(caption=about_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Back to Start", callback_data="btn_home")]]))
+            pass
 
     elif data == "btn_invite":
         invite_link = f"https://t.me/{bot_username}?start=invite_{user_id}"
         invite_text = (
             "🎁 **Invite & Earn**\n\n"
-            "Welcome to the referral program!\n"
-            "Invite your friends and earn rewards.\n\n"
-            "💰 **Earn 1 coin for every invite!**\n\n"
-            "🎯 **Your Stats:**\n"
-            f"├ Invites: {user.get('invites', 0)}\n"
-            f"└ Coins: {user.get('coins', 0)}\n\n"
-            f"🔗 **Your Invite Link:**\n`{invite_link}`\n\n"
-            "👆 Tap to copy and share with friends!"
+            "Invite your friends and earn rewards!\n\n"
+            "💰 **Earn 1 coin for every friend who joins!**\n\n"
+            f"🔗 **Your Invite Link:**\n`{invite_link}`"
         )
         invite_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📩 Share to Chat", url=f"https://t.me/share/url?url={invite_link}&text=Fastest%20TeraBox%20Downloader%20Bot!")],
-            [InlineKeyboardButton("« Back to Start", callback_data="btn_home")]
+            [InlineKeyboardButton("📩 Share with Friends", url=f"https://t.me/share/url?url={invite_link}&text=Fastest%20TeraBox%20Downloader!")],
+            [InlineKeyboardButton("« Back", callback_data="btn_home")]
         ])
         try:
             await query.message.edit_text(invite_text, reply_markup=invite_kb)
         except Exception:
-            await query.message.edit_caption(caption=invite_text, reply_markup=invite_kb)
+            pass
 
     elif data == "btn_share":
         share_link = f"https://t.me/{bot_username}?start=invite_{user_id}"
         share_text = (
-            "🔗 **Share Your Invite Link:**\n\n"
+            "🔗 **Share Bot:**\n\n"
             f"`{share_link}`\n\n"
-            "👆 Tap on link to Copy\n\n"
-            "📖 **How to Share:**\n"
-            "1. Click the Share to Chat button below to send your invite directly to a chat.\n"
-            "2. Copy the link and share it with friends.\n\n"
-            "🎯 Invite friends to earn a coin!"
+            "Click below to send directly to your chats:"
         )
         share_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📩 Share to Chat", url=f"https://t.me/share/url?url={share_link}&text=Fastest%20TeraBox%20Downloader%20Bot!")],
-            [InlineKeyboardButton("« Back to Start", callback_data="btn_home")]
+            [InlineKeyboardButton("📩 Share to Chat", url=f"https://t.me/share/url?url={share_link}&text=Fastest%20TeraBox%20Downloader!")],
+            [InlineKeyboardButton("« Back", callback_data="btn_home")]
         ])
         try:
             await query.message.edit_text(share_text, reply_markup=share_kb)
         except Exception:
-            await query.message.edit_caption(caption=share_text, reply_markup=share_kb)
+            pass
 
     elif data == "btn_earn":
-        invite_link = f"https://t.me/{bot_username}?start=invite_{user_id}"
         earn_text = (
-            "💰 **Earn Money from Bot**\n\n"
-            "**2 Ways to Earn:**\n\n"
-            "1️⃣ **Invite & Earn Coins**\n"
-            "├ Share your invite link\n"
-            "├ Earn 1 coin per user\n"
-            "└ Convert coins to cash\n\n"
-            f"**Your Invite Link:**\n`{invite_link}`\n\n"
-            "2️⃣ **Share Promo Code**\n"
-            "├ Users get 10% discount\n"
-            "├ You earn 5% of plan price\n"
-            "└ Withdraw anytime\n\n"
-            "💡 You can do both to maximize earnings!"
+            "💰 **Earn Rewards:**\n\n"
+            "1. Share your referral link with friends.\n"
+            "2. Earn points when your referrals subscribe to premium.\n"
+            "3. Redeem points for free premium time!"
         )
         try:
-            await query.message.edit_text(earn_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Back to Start", callback_data="btn_home")]]))
+            await query.message.edit_text(earn_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Back", callback_data="btn_home")]]))
         except Exception:
-            await query.message.edit_caption(caption=earn_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Back to Start", callback_data="btn_home")]]))
+            pass
 
-@app.on_message(filters.text & filters.private & ~filters.command(["start", "addpremium"]))
+@app.on_message(filters.text & filters.private & ~filters.command(["start", "addpremium", "premium", "help"]))
 async def process_terabox_link(client: Client, message: Message):
     text = message.text.strip()
     url_match = re.search(r"(https?://[^\s]+)", text)
@@ -475,7 +463,6 @@ async def process_terabox_link(client: Client, message: Message):
     free_used = user.get("free_count", 0)
     bonus_left = user.get("bonus_count", 0)
 
-    # Daily Limit Enforcement
     if not is_premium and free_used >= 2 and bonus_left <= 0:
         token = str(uuid.uuid4())[:8]
         tokens_col.insert_one({"token": token, "user_id": user_id, "created_at": time.time()})
@@ -487,11 +474,8 @@ async def process_terabox_link(client: Client, message: Message):
             [InlineKeyboardButton("⭐ Buy Premium (Unlimited)", callback_data="btn_premium")]
         ])
         await message.reply_text(
-            f"ℹ️ **Daily Download Info**\n\n"
-            f"• Used today: 2/2\n"
-            f"• Remaining: 0\n"
-            f"🌟 Upgrade to Premium for unlimited downloads!\n\n"
-            f"⚠️ Daily free limit reached! Click below to verify via shortener or upgrade to premium:",
+            f"ℹ️ **Daily Download Limit Reached (2/2)**\n\n"
+            f"🌟 Upgrade to Premium for unlimited downloads or complete verification below:",
             reply_markup=btn
         )
         return
@@ -499,11 +483,8 @@ async def process_terabox_link(client: Client, message: Message):
     used_display = "Unlimited" if is_premium else f"{min(free_used, 2)}/2"
     rem_display = "Unlimited" if is_premium else f"{max(0, 2 - free_used) + bonus_left}"
     info_msg = await message.reply_text(
-        f"ℹ️ **Daily Download Info**\n\n"
-        f"• Used today: {used_display}\n"
-        f"• Remaining: {rem_display}\n"
-        f"🌟 Upgrade to Premium for unlimited downloads!\n\n"
-        f"🔄 Processing your request..."
+        f"ℹ️ **Download Info:** {used_display} used | {rem_display} left\n"
+        f"🔄 Processing link, please wait..."
     )
 
     download_link, file_name = await fetch_terabox_api(terabox_url)
@@ -518,7 +499,6 @@ async def process_terabox_link(client: Client, message: Message):
         else:
             users_col.update_one({"user_id": user_id}, {"$inc": {"bonus_count": -1}})
 
-    # Direct Video Stream / Upload Delivery with Auto-Delete in 3 Hours
     try:
         temp_file = f"download_{user_id}_{int(time.time())}.mp4"
         async with aiohttp.ClientSession() as session:
@@ -529,8 +509,8 @@ async def process_terabox_link(client: Client, message: Message):
 
                     caption_text = (
                         f"🎬 **File Name:** `{file_name}`\n\n"
-                        f"⚠️ **Notice:** This video will automatically expire & delete in **3 Hours** for copyright safety.\n"
-                        f"📌 Please forward or save this video to your saved messages/chats now!\n\n"
+                        f"⚠️ **Notice:** This video will automatically delete in **3 Hours** for copyright safety.\n"
+                        f"📌 Please forward or save this video to your Saved Messages now!\n\n"
                         f"⚡ Delivered via @{config.BOT_USERNAME}"
                     )
 
@@ -545,13 +525,12 @@ async def process_terabox_link(client: Client, message: Message):
                         os.remove(temp_file)
                     await info_msg.delete()
 
-                    # Background task to delete video after 3 hours (10800 seconds)
                     async def delete_after_delay(chat_id, msg_id):
                         await asyncio.sleep(10800)
                         try:
                             await client.delete_messages(chat_id=chat_id, message_ids=msg_id)
-                        except Exception as e:
-                            print(f"Auto-delete error: {e}")
+                        except Exception:
+                            pass
 
                     asyncio.create_task(delete_after_delay(sent_msg.chat.id, sent_msg.id))
                     return
@@ -563,12 +542,10 @@ async def process_terabox_link(client: Client, message: Message):
     ])
     await info_msg.edit_text(
         f"🎬 **File Name:** `{file_name}`\n\n"
-        f"⚠️ **Notice:** Direct link / stream will expire soon. Please save/download promptly.\n\n"
-        f"Click below to watch or download directly:",
+        f"⚠️ Direct link expires soon. Download or stream below:",
         reply_markup=btn
     )
 
-# Render Port Binding
 async def handle_ping(request):
     return web.Response(text="Bot is live 24/7!")
 
@@ -584,7 +561,7 @@ async def start_server():
 async def run_bot():
     await start_server()
     await app.start()
-    print("Bot started successfully!")
+    print("Bot started successfully and listening!")
     while True:
         await asyncio.sleep(3600)
 
