@@ -9,6 +9,7 @@ import os
 import re
 import time
 import uuid
+import json
 import urllib.parse
 import aiohttp
 import aiofiles
@@ -88,24 +89,44 @@ async def get_shortlink(url: str):
 
 async def fetch_terabox_api(url: str):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9"
     }
-    
-    # Extract short ID
-    match = re.search(r"/(?:s/)?(1[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)$", url)
-    short_id = match.group(1) if match else url.split("/")[-1]
-    normalized_url = f"https://www.terabox.app/s/{short_id}"
 
-    # Your Dedicated Cloudflare Worker + Fallbacks
+    # Extract clean ID
+    match = re.search(r"/(?:s/)?(1[a-zA-Z0-9_-]+|[a-zA-Z0-9_-]+)$", url)
+    short_id = match.group(1) if match else url.split("/")[-1].split("?")[0]
+    
+    # Clean standard formats
+    s_url = f"https://1024terabox.com/s/{short_id}"
+    app_url = f"https://www.terabox.app/s/{short_id}"
+
+    # Method 1: Direct Web Page Extraction (Bypasses Cloudflare API Block)
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(s_url, timeout=12) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+                    # Check for direct dlink or stream inside page javascript
+                    dlink_match = re.search(r'"dlink"\s*:\s*"([^"]+)"', html)
+                    fname_match = re.search(r'"server_filename"\s*:\s*"([^"]+)"', html)
+                    if dlink_match:
+                        dlink = dlink_match.group(1).replace("\\/", "/")
+                        fname = fname_match.group(1) if fname_match else "TeraBox_Video.mp4"
+                        return dlink, fname
+    except Exception as e:
+        print(f"Direct scraper fallback: {e}")
+
+    # Method 2: High Priority Telegram Community APIs
     endpoints = [
-        f"https://odd-mountain-2211.info-vedanth-in.workers.dev/?url={normalized_url}",
-        f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={normalized_url}",
-        f"https://yt-video-production.up.railway.app/terabox?url={normalized_url}",
-        f"https://terabox-api.grayhat.workers.dev/?url={normalized_url}"
+        f"https://teraboxvideodownloader.nepcoderdevs.workers.dev/?url={app_url}",
+        f"https://terabox-api.grayhat.workers.dev/?url={app_url}",
+        f"https://yt-video-production.up.railway.app/terabox?url={s_url}",
+        f"https://api.terabox.fun/download?url={s_url}"
     ]
 
-    async with aiohttp.ClientSession(headers=headers) as session:
+    async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as session:
         for ep in endpoints:
             try:
                 async with session.get(ep, timeout=12) as resp:
@@ -486,7 +507,7 @@ async def process_terabox_link(client: Client, message: Message):
     rem_display = "Unlimited" if is_premium else f"{max(0, 2 - free_used) + bonus_left}"
     info_msg = await message.reply_text(
         f"ℹ️ **Download Info:** {used_display} used | {rem_display} left\n"
-        f"🔄 Processing link, please wait..."
+        f"🔄 Fetching video directly, please wait..."
     )
 
     download_link, file_name = await fetch_terabox_api(terabox_url)
@@ -504,7 +525,7 @@ async def process_terabox_link(client: Client, message: Message):
     try:
         temp_file = f"download_{user_id}_{int(time.time())}.mp4"
         async with aiohttp.ClientSession() as session:
-            async with session.get(download_link, timeout=60) as resp:
+            async with session.get(download_link, timeout=90) as resp:
                 if resp.status == 200:
                     async with aiofiles.open(temp_file, mode='wb') as f:
                         await f.write(await resp.read())
